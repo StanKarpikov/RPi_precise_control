@@ -23,7 +23,7 @@ sudo insmod ptime_control.ko
 ```
 Check the module leaded:
 ```bash
-lsmod | grep “ptime_control”
+lsmod | grep "dir ptime_control"
 ```
 
 4. View kernel log for `printk`:
