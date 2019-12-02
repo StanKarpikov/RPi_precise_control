@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/spinlock.h>
+
 /*--------------------------------------------------------------
                       DEFINES
 ---------------------------------------------------------------*/
@@ -27,9 +28,12 @@ MODULE_VERSION("0.0.1");
 #define DEVICE_NAME "ptime_control"
 #define CLASS_NAME "chardrv"
 
+#define LOG_PREFIX "PTime: "
+
 #define SEC_TO_NSEC  (1000ULL*1000ULL*1000ULL)
 #define USEC_TO_NSEC (1000UL)
 #define SEC_TO_USEC  (1000UL*1000ULL)
+
 /*--------------------------------------------------------------
               PRIVATE FUNCTIONS PROTOTYPES
 ---------------------------------------------------------------*/
@@ -98,8 +102,7 @@ int event_list_insert(struct rb_root *root, struct event_list_element_s *new_eve
   struct event_list_element_s *check_node;
   struct rb_node **link = &(root->rb_node), *parent = NULL;
   uint64_t new_event_time_comp =  new_event->key.open_time_s * SEC_TO_USEC + new_event->key.open_time_us;
-	
-  /* Figure out where to put new node */
+
   int i =0;
   while (*link && i<1000) 
   {
@@ -138,7 +141,7 @@ int event_add(event_element_t new_event)
   new_node = (struct event_list_element_s *)kmalloc(sizeof(struct event_list_element_s), GFP_KERNEL);
   new_node->key = new_event;
   event_list_insert(&event_list_root, new_node);
-  //printk(KERN_INFO "Add event [%u.%06u]-[%u.%06u]", new_event.open_time_s, new_event.open_time_us,  new_event.close_time_s, new_event.close_time_us);
+  //printk(KERN_INFO LOG_PREFIX "Add event [%u.%06u]-[%u.%06u]", new_event.open_time_s, new_event.open_time_us,  new_event.close_time_s, new_event.close_time_us);
   
   return 1;
 }
@@ -154,7 +157,7 @@ static void remove_passed(uint32_t before_time_s, uint32_t before_time_us)
 	uint32_t next_open_timeout_us = 0;
 	uint64_t before_time_comp = before_time_s * SEC_TO_USEC + before_time_us;
 	bool continue_delete=false;
-	//printk(KERN_INFO "Remove events before [%u.%06u]", before_time_s, before_time_us);
+	//printk(KERN_INFO LOG_PREFIX "Remove events before [%u.%06u]", before_time_s, before_time_us);
 	int i=0;
 	do
 	{
@@ -174,7 +177,7 @@ static void remove_passed(uint32_t before_time_s, uint32_t before_time_us)
 		bool test=next_open_timeout_comp <= before_time_comp;
         if(test)
 		{
-			//printk(KERN_INFO "Remove event at [%u.%06u]", next_open_timeout_s, next_open_timeout_us);
+			//printk(KERN_INFO LOG_PREFIX "Remove event at [%u.%06u]", next_open_timeout_s, next_open_timeout_us);
 			rb_erase(minimum_time_node, &event_list_root);
 			kfree(minimum_time_element);
             continue_delete = true;
@@ -184,7 +187,7 @@ static void remove_passed(uint32_t before_time_s, uint32_t before_time_us)
 	spin_unlock_irqrestore(&tree_lock, flags);
 }
 
-static void print_events_list(struct rb_node* node, bool is_root)
+static __attribute__ ((unused)) void print_events_list(struct rb_node* node, bool is_root)
 {
 	static int i=0;
 	if(is_root)i=0;
@@ -196,7 +199,7 @@ static void print_events_list(struct rb_node* node, bool is_root)
         tmp_element = rb_entry(node, struct event_list_element_s, node);
         uint32_t next_open_timeout_s  = tmp_element->key.open_time_s;
 		uint32_t next_open_timeout_us = tmp_element->key.open_time_us;
-        printk(KERN_INFO "Event [%d]: [%u.%06u] \n", i++, next_open_timeout_s, next_open_timeout_us);
+        printk(KERN_INFO LOG_PREFIX "Event [%d]: [%u.%06u] \n", i++, next_open_timeout_s, next_open_timeout_us);
         print_events_list(node->rb_right,false);
     }
 }
@@ -205,7 +208,6 @@ static void print_events_list(struct rb_node* node, bool is_root)
 static void update_timer(void)
 {
 	unsigned long flags;
-	/* Get next closest time */
 	//print_events_list(event_list_root.rb_node, true);
 		
 	struct event_list_element_s *next_time_node = 0;
@@ -214,6 +216,8 @@ static void update_timer(void)
 	uint32_t next_close_timeout_s = 0;
 	uint32_t next_close_timeout_us = 0;
 	spin_lock_irqsave(&tree_lock, flags);
+		
+	/* Get next closest time */
 	struct rb_node *next_time=rb_first(&event_list_root);
 	if(!next_time)
 	{
@@ -251,7 +255,7 @@ static void update_timer(void)
 	if(next_open_timeout_ns > current_time_ns && (next_open_timeout_ns != current_pending_open_time))
 	{
 		/* Set/update time */
-		printk(KERN_INFO "Update open timer to next time [%u.%06u]", next_open_timeout_s, next_open_timeout_us);		
+		printk(KERN_INFO LOG_PREFIX "Update open timer to next time [%u.%06u]", next_open_timeout_s, next_open_timeout_us);		
 		hrtimer_try_to_cancel(&timer_next_open_event);
 		hrtimer_start(&timer_next_open_event, ns_to_ktime(next_open_timeout_ns), HRTIMER_MODE_ABS);
 
@@ -260,7 +264,7 @@ static void update_timer(void)
 		  (next_open_timeout_ns < current_pending_open_time))
 		{
 			current_pending_close_time = next_close_timeout_ns;
-			printk(KERN_INFO "Update close timer to next time [%u.%06u]", next_close_timeout_s, next_close_timeout_us);
+			printk(KERN_INFO LOG_PREFIX "Update close timer to next time [%u.%06u]", next_close_timeout_s, next_close_timeout_us);
 		}
 		current_pending_open_time  = next_open_timeout_ns;
 	}
@@ -269,7 +273,7 @@ static void update_timer(void)
 static void update_close_timer(void)
 {
 	/* Set/update time */
-	//printk(KERN_INFO "Set close timer to next time [%llu]", current_pending_close_time);
+	//printk(KERN_INFO LOG_PREFIX "Set close timer to next time [%llu]", current_pending_close_time);
 	hrtimer_try_to_cancel(&timer_next_close_event);
 	hrtimer_start(&timer_next_close_event, ns_to_ktime(current_pending_close_time), HRTIMER_MODE_ABS);
 }
@@ -279,14 +283,13 @@ static void update_close_timer(void)
 static enum hrtimer_restart function_timer_open(struct hrtimer * unused)
 {
 	current_pending_open_time = 0;
-	////ktime_t current_time_ns = ktime_get();
 	////gpio_set_value(GPIO_OUTPUT,1);
     struct timespec current_time_ts;
     getnstimeofday (&current_time_ts);
     uint32_t current_time_s  = current_time_ts.tv_sec;
     uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
 
-	printk(KERN_INFO "<-- Open interrupt at [%u.%06u]", current_time_s, current_time_us);
+	printk(KERN_INFO LOG_PREFIX "<-- Open interrupt at [%u.%06u]", current_time_s, current_time_us);
 	
 	update_close_timer();
 	remove_passed(current_time_s, current_time_us);
@@ -299,14 +302,12 @@ static enum hrtimer_restart function_timer_open(struct hrtimer * unused)
  */
 static enum hrtimer_restart function_timer_close(struct hrtimer * unused)
 {
-	//current_pending_close_time = 0;
-	
     struct timespec current_time_ts;
     getnstimeofday (&current_time_ts);
     uint32_t current_time_s  = current_time_ts.tv_sec;
     uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
 
-	printk(KERN_INFO ">-- Close interrupt at [%u.%06u]", current_time_s, current_time_us);
+	printk(KERN_INFO LOG_PREFIX ">-- Close interrupt at [%u.%06u]", current_time_s, current_time_us);
 
 	return HRTIMER_NORESTART;
 }
@@ -317,7 +318,7 @@ static enum hrtimer_restart function_timer_close(struct hrtimer * unused)
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
 static int dev_open(struct inode *inodep, struct file *filep){
-   //printk(KERN_INFO "PTime: Device opened\n");
+   //printk(KERN_INFO LOG_PREFIX "Device opened\n");
    return 0;
 }
  
@@ -331,7 +332,7 @@ static int dev_open(struct inode *inodep, struct file *filep){
  */
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
   /* Note: for the future use */
-  printk(KERN_INFO "PTime: Trying to read\n");
+  printk(KERN_INFO LOG_PREFIX "Trying to read\n");
   return -EFAULT;
 }
  
@@ -344,28 +345,26 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  *  @param offset The offset if required
  */
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   //printk(KERN_INFO "PTime: Received %zu characters from the user\n", len);
-   
-   uint32_t delta_s = 0;
-   sscanf(buffer,"%u",&delta_s);
-
-   //ktime_t current_time = ktime_get();
-   //current_time = ktime_add_us(current_time, ((uint64_t)delta)*1000*1000);
+   //printk(KERN_INFO LOG_PREFIX "Received %zu characters from the user\n", len);
+   /*
    struct timespec current_time_ts;
    getnstimeofday (&current_time_ts);
    uint32_t current_time_s  = current_time_ts.tv_sec;
    uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
-   
+   */
    event_element_t new_event;
-   new_event.open_time_s  = current_time_s  + delta_s;
-   new_event.open_time_us = current_time_us;
-   new_event.close_time_s   = current_time_s  + delta_s + 3;
-   new_event.close_time_us  = current_time_us;
-   
-   printk(KERN_INFO "+ Timeout add %us from now [%u.%06u] to [%u.%06u]" , 
-					delta_s, 
-					current_time_s, current_time_us,
-					new_event.open_time_s, new_event.open_time_us
+   if(sscanf(buffer,"%u.%06u %u.%06u",
+                  &new_event.open_time_s,  &new_event.open_time_us,
+                  &new_event.close_time_s, &new_event.close_time_us
+      )!=4)
+   {
+		printk(KERN_WARNING LOG_PREFIX "Wrong arguments\n");
+		return -EINVAL;
+   }
+
+   printk(KERN_INFO LOG_PREFIX "+ Timeout add [%u.%06u]-[%u.%06u]" , 
+					new_event.open_time_s, new_event.open_time_us,
+					new_event.close_time_s, new_event.close_time_us
 					);
 
    event_add(new_event);
@@ -379,7 +378,7 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
 static int dev_release(struct inode *inodep, struct file *filep){
-   //printk(KERN_INFO "PTime: Device successfully closed\n");
+   //printk(KERN_INFO LOG_PREFIX "Device successfully closed\n");
    return 0;
 }
 static char* ptime_devnode(struct device *dev, umode_t *mode)
@@ -391,7 +390,7 @@ static char* ptime_devnode(struct device *dev, umode_t *mode)
         return NULL;
 }
 static int __init ptime_control_init(void) {
-   printk(KERN_INFO "PTime: --- Control started\n");
+   printk(KERN_INFO LOG_PREFIX "--- Control started\n");
 
    /* Register major number */
    major_number = register_chrdev(0, DEVICE_NAME, &fops);
@@ -399,27 +398,27 @@ static int __init ptime_control_init(void) {
       printk(KERN_ALERT "PTime failed to register a major number\n");
       return major_number;
    }
-   //printk(KERN_INFO "PTime: registered correctly with major number %d\n", major_number);
+   //printk(KERN_INFO LOG_PREFIX "registered correctly with major number %d\n", major_number);
  
    /* Register the device class */
    ptime_class = class_create(THIS_MODULE, CLASS_NAME);
    if (IS_ERR(ptime_class)){
       unregister_chrdev(major_number, DEVICE_NAME);
-      printk(KERN_ALERT "PTime: Failed to register device class\n");
+      printk(KERN_ALERT LOG_PREFIX "Failed to register device class\n");
       return PTR_ERR(ptime_class);
    }
    ptime_class->devnode = ptime_devnode;
-   //printk(KERN_INFO "PTime: device class registered correctly\n");
+   //printk(KERN_INFO LOG_PREFIX "device class registered correctly\n");
  
    /* Register the device driver */
    ptime_device = device_create(ptime_class, NULL, MKDEV(major_number, 0), NULL, DEVICE_NAME);
    if (IS_ERR(ptime_device)){
       class_destroy(ptime_class);
       unregister_chrdev(major_number, DEVICE_NAME);
-      printk(KERN_ALERT "PTime: Failed to create the device\n");
+      printk(KERN_ALERT LOG_PREFIX "Failed to create the device\n");
       return PTR_ERR(ptime_device);
    }
-   //printk(KERN_INFO "PTime: device created correctly\n");
+   //printk(KERN_INFO LOG_PREFIX "device created correctly\n");
  
    /* Init high resolution timer */
    hrtimer_init (& timer_next_open_event, CLOCK_REALTIME, HRTIMER_MODE_ABS);
@@ -435,7 +434,7 @@ static void __exit ptime_control_exit(void) {
 	class_unregister(ptime_class);
 	class_destroy(ptime_class);
 	unregister_chrdev(major_number, DEVICE_NAME);
-	printk(KERN_INFO "PTime: --- Control stopped\n");
+	printk(KERN_INFO LOG_PREFIX "--- Control stopped\n");
 }
 
 module_init(ptime_control_init);
