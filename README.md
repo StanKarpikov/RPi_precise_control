@@ -9,7 +9,7 @@ sudo apt-get install build-essential linux-headers-`uname -r`
 ```
 or
 ```bash
-apt install raspberrypi-kernel{,-headers} 
+sudo apt-get install raspberrypi-kernel{,-headers} 
 ```
 
 2. Make (from folder with sources)

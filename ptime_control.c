@@ -34,6 +34,8 @@ MODULE_VERSION("0.0.1");
 #define USEC_TO_NSEC (1000UL)
 #define SEC_TO_USEC  (1000UL*1000ULL)
 
+#define CONTROL_CLEAR_STRING "CLEAR"
+
 /*--------------------------------------------------------------
               PRIVATE FUNCTIONS PROTOTYPES
 ---------------------------------------------------------------*/
@@ -345,13 +347,23 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  *  @param offset The offset if required
  */
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   //printk(KERN_INFO LOG_PREFIX "Received %zu characters from the user\n", len);
+   //printk(KERN_INFO LOG_PREFIX "Received %zu characters from the user: %s\n", len, buffer);
    /*
    struct timespec current_time_ts;
    getnstimeofday (&current_time_ts);
    uint32_t current_time_s  = current_time_ts.tv_sec;
    uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
    */
+   if(strlen(CONTROL_CLEAR_STRING)==len && strncmp(buffer, CONTROL_CLEAR_STRING, len)==0)
+   {
+       printk(KERN_INFO LOG_PREFIX "Clear list");
+       hrtimer_try_to_cancel(&timer_next_open_event);
+       hrtimer_try_to_cancel(&timer_next_close_event);
+       remove_passed(0xFFFFFFFF,0xFFFFFFFF);
+       //TODO: if(in_open_state)close();
+       return len;
+   }
+   
    event_element_t new_event;
    if(sscanf(buffer,"%u.%06u %u.%06u",
                   &new_event.open_time_s,  &new_event.open_time_us,
