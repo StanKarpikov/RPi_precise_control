@@ -15,6 +15,9 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/spinlock.h>
+#include <linux/timer.h>
+
+#include "rpi_pwm_control.h"
 
 /*--------------------------------------------------------------
                       DEFINES
@@ -36,6 +39,11 @@ MODULE_VERSION("0.0.1");
 
 #define CONTROL_CLEAR_STRING "CLEAR"
 
+#define PWM_OFF_TIMER_DURATION (500)
+#define PWM_OPEN_STATE_MS (150)
+#define PWM_CLOSED_STATE_MS (100)
+
+#define PWM_ON_OFF_GPIO (17) /** GPIO17 to connect power switch */
 /*--------------------------------------------------------------
               PRIVATE FUNCTIONS PROTOTYPES
 ---------------------------------------------------------------*/
@@ -48,6 +56,7 @@ static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
+static void __exit ptime_control_exit(void);
 /*--------------------------------------------------------------
                       PRIVATE TYPES
 ---------------------------------------------------------------*/
@@ -83,6 +92,8 @@ static int    major_number;                  /**< Device major number */
 static struct class*  ptime_class  = NULL;   /**< Device class pointer */
 static struct device* ptime_device = NULL;   /**< Device pointer */
  
+static struct timer_list pwm_off_timer;
+ 
 struct rb_root event_list_root = RB_ROOT;
 static struct hrtimer timer_next_open_event;
 static struct hrtimer timer_next_close_event;
@@ -96,9 +107,38 @@ static DEFINE_SPINLOCK(tree_lock);
                     PRIVATE FUNCTIONS
 ---------------------------------------------------------------*/
 
+static void pwm_on(void){
+    printk(KERN_INFO LOG_PREFIX "Switch PWM on \n");
+    gpio_set_mode(PWM_ON_OFF_GPIO, 1);
+    gpio_write(PWM_ON_OFF_GPIO, 1);
+}
+
+static void pwm_off(struct timer_list *t)
+{
+    printk(KERN_INFO LOG_PREFIX "Switch PWM off \n");
+    gpio_set_mode(PWM_ON_OFF_GPIO, 1);
+    gpio_write(PWM_ON_OFF_GPIO, 0);
+}
+
+static void schedule_pwm_off(void){
+    mod_timer(&pwm_off_timer, jiffies + msecs_to_jiffies(PWM_OFF_TIMER_DURATION));
+}
+
+static void open_action(void){
+    pwm_on();
+    pwm_pulse_width(PWM_CHANNEL_0, PWM_OPEN_STATE_MS, false);
+    schedule_pwm_off();
+}
+
+static void close_action(void){
+    pwm_on();
+    pwm_pulse_width(PWM_CHANNEL_0, PWM_CLOSED_STATE_MS, false);
+    schedule_pwm_off();
+}
+
 /** @brief Insert new event list element into tree
  */
-int event_list_insert(struct rb_root *root, struct event_list_element_s *new_event)
+static int event_list_insert(struct rb_root *root, struct event_list_element_s *new_event)
 {
   spin_lock(&tree_lock);
   struct event_list_element_s *check_node;
@@ -292,7 +332,8 @@ static enum hrtimer_restart function_timer_open(struct hrtimer * unused)
     uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
 
 	printk(KERN_INFO LOG_PREFIX "<-- Open interrupt at [%u.%06u]", current_time_s, current_time_us);
-	
+	open_action();
+    
 	update_close_timer();
 	remove_passed(current_time_s, current_time_us);
 	update_timer();
@@ -310,6 +351,7 @@ static enum hrtimer_restart function_timer_close(struct hrtimer * unused)
     uint32_t current_time_us = current_time_ts.tv_nsec / USEC_TO_NSEC;
 
 	printk(KERN_INFO LOG_PREFIX ">-- Close interrupt at [%u.%06u]", current_time_s, current_time_us);
+    close_action();
 
 	return HRTIMER_NORESTART;
 }
@@ -438,6 +480,13 @@ static int __init ptime_control_init(void) {
    hrtimer_init (& timer_next_close_event, CLOCK_REALTIME, HRTIMER_MODE_ABS);
    timer_next_close_event.function = function_timer_close;
    
+   if(pwm_init(ptime_device)<0){
+      printk(KERN_WARNING LOG_PREFIX "Failed init PWM\n");
+      ptime_control_exit();
+      return -1;
+   }
+   timer_setup(&pwm_off_timer, pwm_off, 0);
+        
    return 0;
 }
 
@@ -446,6 +495,7 @@ static void __exit ptime_control_exit(void) {
 	class_unregister(ptime_class);
 	class_destroy(ptime_class);
 	unregister_chrdev(major_number, DEVICE_NAME);
+    del_timer(&pwm_off_timer);
 	printk(KERN_INFO LOG_PREFIX "--- Control stopped\n");
 }
 

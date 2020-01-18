@@ -31,3 +31,5 @@ modules.builtin
 #
 !.gitignore
 !.mailmap
+
+rpi_control

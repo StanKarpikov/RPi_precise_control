@@ -8,23 +8,21 @@
                       INCLUDES
 ---------------------------------------------------------------*/
 
-#include <linux/types.h>
-#include <linux/io.h>
-#include <linux/ioctl.h>
-#include <linux/ioport.h>
-#include <asm/uaccess.h>
-#include <linux/delay.h>
-
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/types.h>
 
 #include "rpi_pwm_control.h"
 
 /*--------------------------------------------------------------
                       DEFINES
 ---------------------------------------------------------------*/
-/* macros to get at IO space when running virtually */
-#define IO_ADDRESS(x)	(((x) & 0x0fffffff) + (((x) >> 4) & 0x0f000000) + 0xf0000000)
-
-#define __io_address(a)     __io(IO_ADDRESS(a))
 
 #define PI_1_PERIPHERAL_BASE    0x20000000
 #define PI_2_PERIPHERAL_BASE    0x3F000000
@@ -93,19 +91,20 @@ static volatile uint32_t *pwm_mmap;
 /** Pointer to mapped Clock peripheral register.*/
 static volatile uint32_t *clock_mmap;
 
-/** PWM pin that is used to output */
-static int servo_gpio  = PWM0_GPIO_18;
-
 /*
 Raspberry Pi PWM map:
 
 PWM0: 12,4(Alt0) 18,2(Alt5) 40,4(Alt0)            52,5(Alt1)
 PWM1: 13,4(Alt0) 19,2(Alt5) 41,4(Alt0) 45,4(Alt0) 53,5(Alt1)
 */
-/** Alt function codes for PWM GPIO in enum */
+/** Alt function codes for PWM GPIO in enum pwm_gpio */
 static const uint8_t alt_codes[PWM_GPIO_SIZE]={0,5,0,1,0,5,0,0,1};
-/** GPIO pin numbers for PWM GPIO in enum */
+/** GPIO pin numbers for PWM GPIO in enum pwm_gpio */
 static const uint8_t gpio_num[PWM_GPIO_SIZE] ={12,18,40,52,13,19,41,45,53};
+
+/** PWM pin that is used to output */
+static int servo_gpio  = PWM0_GPIO_18;
+static bool servo_invert = false;
 
 /** BCM2835 ARM Peripherals pg 91, 10 gpios per gpfsel with mode bits */
 static unsigned int gpfsel_mode_table[] =
@@ -121,54 +120,77 @@ static unsigned int gpfsel_mode_table[] =
  *  @param pin - Pin number
  *  @param pud - Pull Up
  */
-static void __attribute__ ((unused)) gpio_set_pud(uint8_t pin, int pud)
+static void gpio_set_pud(uint8_t pin, int pud)
 {
     int  gp_reg = GPPUDCLK_REG + ((pin > 31) ? 1 : 0);
 
     if (pud != PUD_DOWN && pud != PUD_UP)
         return;
     *(gpio_mmap + GPPUD_REG) = pud;
-    udelay(2);          // min wait of 150 cycles
+    usleep(2);          // min wait of 150 cycles
     *(gpio_mmap + gp_reg) = 1 << (pin & 0x1f);
-    udelay(2);
+    usleep(2);
     *(gpio_mmap + GPPUD_REG) = 0;
     *(gpio_mmap + gp_reg) = 0;
+}
+
+/** @brief Get Raspberry Pi model
+ *  @return Model (1 - RPi 1; 2 - RPi 2+ (3, 3B+...))
+ */
+static int pi_model(void)
+{
+    FILE  *f;
+    int   model = 1;
+    char  buf[200], arm[32];
+
+    if ((f = fopen("/proc/cpuinfo", "r")) == NULL)
+        return 0;
+
+    while (fgets(buf, sizeof(buf), f) != NULL)
+    {
+        if (sscanf(buf, "model name %*s %31s", arm) > 0)
+            {
+            if (!strcmp(arm, "ARMv7"))
+                model = 2;
+            break;
+            }
+    }
+    fclose(f);
+    return model;
 }
 
 /** @brief Initialize Peripherals
  *  @param peripheral_base - Address base
  */
-static int init_peripherals(int peripheral_base, struct device *dev)
+static void init_peripherals(int peripheral_base)
 {
+    int      fd;
     uint32_t divi;
-    /*
-    #define DEVICE_NAME "ptime_control"
 
-    printk(KERN_INFO "dev: 0x%x", (uint32_t)dev); 
-    
-    if(devm_request_mem_region(dev, PI_2_PERIPHERAL_BASE + GPIO_BASE, 0x100, DEVICE_NAME ) == NULL )
+    if ((fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0)
     {
-        printk( KERN_ALERT
-            "error:%s: unable to obtain I/O memory address 0x%x\n",
-            DEVICE_NAME, PI_2_PERIPHERAL_BASE + GPIO_BASE );
+        fprintf(stderr, "/dev/mem open failed: %m\n");
+        exit (-1);
+    }
 
-        return -1;
-    }*/
-  
-    gpio_mmap = devm_ioremap_nocache(dev, PI_2_PERIPHERAL_BASE + GPIO_BASE, 0x10000);
-    clock_mmap = devm_ioremap_nocache(dev, PI_2_PERIPHERAL_BASE + CLOCK_BASE, 0x10000);
-    pwm_mmap = devm_ioremap_nocache(dev, PI_2_PERIPHERAL_BASE + PWM_BASE, 0x10000);
-    
-    if(!gpio_mmap) { printk(KERN_INFO "gpio_mmap failed" ); return -1;}
-    if(!pwm_mmap)  { printk(KERN_INFO "pwm_mmap failed"  ); return -1;}
-    if(!clock_mmap){ printk(KERN_INFO "clock_mmap failed"); return -1;}
+    gpio_mmap = (uint32_t *) mmap(NULL, 0x100, PROT_READ|PROT_WRITE, MAP_SHARED,
+                        fd, peripheral_base + GPIO_BASE);
+    pwm_mmap  = (uint32_t *) mmap(NULL, 0x100, PROT_READ|PROT_WRITE, MAP_SHARED,
+                        fd, peripheral_base + PWM_BASE);
+    clock_mmap = (uint32_t *) mmap(NULL, 0x100, PROT_READ|PROT_WRITE, MAP_SHARED,
+                        fd, peripheral_base + CLOCK_BASE);
+
+    close(fd);
+
+    if (pwm_mmap == MAP_FAILED || clock_mmap == MAP_FAILED)
+        exit(-1);
 
     gpio_alt_function(gpio_num[servo_gpio], alt_codes[servo_gpio]);
 
     /* Kill clock (waiting for busy flag does not work)
     */
     *(clock_mmap + CM_PWMCTL_REG) = CM_PASSWORD | PWMCTL_KILL;
-    udelay(10);
+    usleep(10);
 
     /* PWM clock is 19.2MHz. Set the divisor so each count gives the resolution
     |  we want.
@@ -181,7 +203,7 @@ static int init_peripherals(int peripheral_base, struct device *dev)
     /* Turn off PWM - reset state.
     */
     *(pwm_mmap + PWM_CTL_REG) = CTL_REG_RESET_STATE;
-    udelay(50);
+    usleep(50);
 
     /* E.g. Range of 20 msec -> 4000 counts at 5 usec PWM resolution */
     *(pwm_mmap + PWM_RNG1_REG) = (uint32_t) PWM_MSEC_TO_COUNT(20);
@@ -191,7 +213,6 @@ static int init_peripherals(int peripheral_base, struct device *dev)
     |  period is count of range.
     */
     *(pwm_mmap + PWM_CTL_REG) = CTL_REG_PWM1_MS_MODE | CTL_REG_PWM2_MS_MODE;
-    return 1;
 }
 
 /*--------------------------------------------------------------
@@ -282,13 +303,21 @@ void gpio_write(uint8_t pin, int level)
 
 /** @brief Initialization function
  */
-int pwm_init(struct device *dev)
+int pwm_init(void)
 {
-	int peripheral_base;
+	int   model, peripheral_base;
 
-    peripheral_base = PI_2_PERIPHERAL_BASE;
+    model = pi_model();
+    if (model == 2){
+        peripheral_base = PI_2_PERIPHERAL_BASE;
+    }else{
+        peripheral_base = PI_1_PERIPHERAL_BASE;
+    }
 
-	return init_peripherals(peripheral_base, dev);
+	printf("model: %d\n", model);
+	init_peripherals(peripheral_base);
+
+	return 1;
 }
 
 #ifdef PWM_TEST
