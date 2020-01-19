@@ -40,8 +40,8 @@ MODULE_VERSION("0.0.1");
 #define CONTROL_CLEAR_STRING "CLEAR"
 
 #define PWM_OFF_TIMER_DURATION (500)
-#define PWM_OPEN_STATE_MS (150)
-#define PWM_CLOSED_STATE_MS (100)
+#define PWM_OPEN_STATE_MS (105)
+#define PWM_CLOSED_STATE_MS (180)
 
 #define PWM_ON_OFF_GPIO (17) /** GPIO17 to connect power switch */
 /*--------------------------------------------------------------
@@ -183,7 +183,7 @@ int event_add(event_element_t new_event)
   new_node = (struct event_list_element_s *)kmalloc(sizeof(struct event_list_element_s), GFP_KERNEL);
   new_node->key = new_event;
   event_list_insert(&event_list_root, new_node);
-  //printk(KERN_INFO LOG_PREFIX "Add event [%u.%06u]-[%u.%06u]", new_event.open_time_s, new_event.open_time_us,  new_event.close_time_s, new_event.close_time_us);
+  printk(KERN_INFO LOG_PREFIX "Add event [%u.%06u]-[%u.%06u]", new_event.open_time_s, new_event.open_time_us,  new_event.close_time_s, new_event.close_time_us);
   
   return 1;
 }
@@ -199,7 +199,7 @@ static void remove_passed(uint32_t before_time_s, uint32_t before_time_us)
 	uint32_t next_open_timeout_us = 0;
 	uint64_t before_time_comp = before_time_s * SEC_TO_USEC + before_time_us;
 	bool continue_delete=false;
-	//printk(KERN_INFO LOG_PREFIX "Remove events before [%u.%06u]", before_time_s, before_time_us);
+	printk(KERN_INFO LOG_PREFIX "Remove events before [%u.%06u]", before_time_s, before_time_us);
 	int i=0;
 	do
 	{
@@ -219,7 +219,7 @@ static void remove_passed(uint32_t before_time_s, uint32_t before_time_us)
 		bool test=next_open_timeout_comp <= before_time_comp;
         if(test)
 		{
-			//printk(KERN_INFO LOG_PREFIX "Remove event at [%u.%06u]", next_open_timeout_s, next_open_timeout_us);
+			printk(KERN_INFO LOG_PREFIX "Remove event at [%u.%06u]", next_open_timeout_s, next_open_timeout_us);
 			rb_erase(minimum_time_node, &event_list_root);
 			kfree(minimum_time_element);
             continue_delete = true;
@@ -250,8 +250,9 @@ static __attribute__ ((unused)) void print_events_list(struct rb_node* node, boo
 static void update_timer(void)
 {
 	unsigned long flags;
-	//print_events_list(event_list_root.rb_node, true);
-		
+	print_events_list(event_list_root.rb_node, true);
+	//printk(KERN_INFO LOG_PREFIX "Try to update timer..");
+        
 	struct event_list_element_s *next_time_node = 0;
 	uint32_t next_open_timeout_s = 0;
 	uint32_t next_open_timeout_us = 0;
@@ -264,6 +265,7 @@ static void update_timer(void)
 	if(!next_time)
 	{
 		spin_unlock_irqrestore(&tree_lock, flags);
+        printk(KERN_INFO LOG_PREFIX "No next");
 		return;
 	}
 	
@@ -271,6 +273,7 @@ static void update_timer(void)
 	if(!next_time_node)
 	{
 		spin_unlock_irqrestore(&tree_lock, flags);
+        printk(KERN_INFO LOG_PREFIX "No entry");
 		return;
 	}
 	spin_unlock_irqrestore(&tree_lock, flags);
@@ -294,6 +297,9 @@ static void update_timer(void)
 	uint64_t next_close_timeout_ns = next_close_timeout_s*SEC_TO_NSEC + next_close_timeout_us*USEC_TO_NSEC;
 
 	/* Set open time */
+    //printk(KERN_INFO LOG_PREFIX "Check next: [%u.%06u]", next_open_timeout_s, next_open_timeout_us);
+    //printk(KERN_INFO LOG_PREFIX "Check current: [%u.%06u]", current_time_s, current_time_us);
+    
 	if(next_open_timeout_ns > current_time_ns && (next_open_timeout_ns != current_pending_open_time))
 	{
 		/* Set/update time */
@@ -309,13 +315,15 @@ static void update_timer(void)
 			printk(KERN_INFO LOG_PREFIX "Update close timer to next time [%u.%06u]", next_close_timeout_s, next_close_timeout_us);
 		}
 		current_pending_open_time  = next_open_timeout_ns;
-	}
+	}else{
+        //printk(KERN_INFO LOG_PREFIX "Timer already set to closer time");
+    }
 }
 
 static void update_close_timer(void)
 {
 	/* Set/update time */
-	//printk(KERN_INFO LOG_PREFIX "Set close timer to next time [%llu]", current_pending_close_time);
+	printk(KERN_INFO LOG_PREFIX "Set close timer to next time [%llu]", current_pending_close_time);
 	hrtimer_try_to_cancel(&timer_next_close_event);
 	hrtimer_start(&timer_next_close_event, ns_to_ktime(current_pending_close_time), HRTIMER_MODE_ABS);
 }
@@ -389,7 +397,9 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  *  @param offset The offset if required
  */
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   //printk(KERN_INFO LOG_PREFIX "Received %zu characters from the user: %s\n", len, buffer);
+   char str_buf[128]={0};
+   strncpy ( str_buf, buffer, len );
+   printk(KERN_INFO LOG_PREFIX "Received %zu characters from the user: %s", len, str_buf);
    /*
    struct timespec current_time_ts;
    getnstimeofday (&current_time_ts);
